@@ -32,7 +32,7 @@ LABEL \
     io.hass.description="Bridge for MAX! Wall Thermostats via CUL-Stick to MQTT" \
     io.hass.arch="aarch64|amd64" \
     io.hass.type="addon" \
-    io.hass.version="1.1.0"
+    io.hass.version="1.2.0"
 
 WORKDIR /app
 
@@ -43,8 +43,9 @@ RUN apk add --no-cache tzdata ca-certificates
 COPY --from=builder /app/max2mqtt /app/max2mqtt
 COPY run.sh /app/run.sh
 
-# Ensure execution permissions and create data directory
-RUN chmod +x /app/run.sh && \
+# Strip Windows CRLF if present, ensure executable, create data dir
+RUN sed -i 's/\r$//' /app/run.sh && \
+    chmod +x /app/run.sh && \
     mkdir -p /data
 
 ENTRYPOINT ["/app/run.sh"]

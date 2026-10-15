@@ -15,7 +15,6 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"go.bug.st/serial"
 )
 
 // Config holds the application configuration
@@ -259,7 +258,7 @@ func setupMQTT() {
 // Serial Reader Loop with Reconnection
 func serialReaderLoop(out chan<- string, in <-chan string) {
 	for {
-		port := openSerialPort()
+		port := openCulConn()
 		if port == nil {
 			time.Sleep(5 * time.Second)
 			continue
@@ -278,32 +277,14 @@ func serialReaderLoop(out chan<- string, in <-chan string) {
 		}
 
 		close(stopWriter)
-		slog.Warn("Serial connection lost or closed. Reconnecting...")
+		slog.Warn("CUL connection lost or closed. Reconnecting...")
 		port.Close()
 		time.Sleep(2 * time.Second)
 	}
 }
 
-// openSerialPort attempts to open the configured serial port.
-// Returns nil if the port could not be opened.
-func openSerialPort() serial.Port {
-	mode := &serial.Mode{
-		BaudRate: config.BaudRate,
-		DataBits: 8,
-		Parity:   serial.NoParity,
-		StopBits: serial.OneStopBit,
-	}
-	port, err := serial.Open(config.SerialPort, mode)
-	if err != nil {
-		slog.Error("Failed to open serial port", "port", config.SerialPort, "error", err)
-		return nil
-	}
-	slog.Info("Opened serial port", "port", config.SerialPort)
-	return port
-}
-
 // initializeCUL sends initialization commands to the CUL device
-func initializeCUL(port serial.Port) {
+func initializeCUL(port CulConn) {
 	// Allow reliable device startup/reboot time (Increased to 4s for NanoCULs)
 	time.Sleep(4 * time.Second)
 
@@ -325,13 +306,13 @@ func initializeCUL(port serial.Port) {
 }
 
 // startSerialWriter runs the serial write loop until stopWriter is closed
-func startSerialWriter(port serial.Port, in <-chan string, stopWriter <-chan struct{}) {
+func startSerialWriter(port CulConn, in <-chan string, stopWriter <-chan struct{}) {
 	for {
 		select {
 		case cmd := <-in:
 			slog.Debug("TX", "command", cmd)
 			if _, err := port.Write([]byte(cmd + "\r")); err != nil {
-				slog.Error("Failed to write to serial", "error", err)
+				slog.Error("Failed to write to CUL", "error", err)
 				return
 			}
 		case <-stopWriter:

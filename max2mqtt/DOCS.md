@@ -169,6 +169,16 @@ Or for a Nano CUL:
 Use the full path in your config:
 `/dev/serial/by-id/usb-SHK_NANO_CUL_868-if00-port0`
 
+### Network CUL (TCP)
+
+If your CUL is reachable over the network (CUN/CUNO, ESP/ser2net bridge, etc.), set `serial_port` to a URL instead of a device path:
+
+```text
+tcp://192.168.1.50:2323
+```
+
+`telnet://host:port` is accepted as an alias (same raw TCP connection). Baud rate is not used for network CULs and can be left at the default. No USB device mapping is required in the add-on when using TCP.
+
 ## Troubleshooting
 
 ### LOVF Error
@@ -181,15 +191,21 @@ If you see a LOVF error in the logs, it means that the CUL stick is full and can
 # Build the image
 docker build -t max2mqtt .
 
-# Run the container
+# USB CUL
 docker run -d \
   --device=/dev/ttyACM0 \
   -e MQTT_BROKER=tcp://192.168.1.10:1883 \
   -e SERIAL_PORT=/dev/ttyACM0 \
   max2mqtt
+
+# Network CUL (no --device needed)
+docker run -d \
+  -e MQTT_BROKER=tcp://192.168.1.10:1883 \
+  -e SERIAL_PORT=tcp://192.168.1.50:2323 \
+  max2mqtt
 ```
-The parameter "--device /dev/ttyACM0" is the correct flag to pass a hardware device from the host system into the container.
-Consistency: If you are setting the environment variable -e SERIAL_PORT=/dev/ttyACM0 two lines later, then you must explicitly expose that device node to the container so the application can access it.
+For a USB CUL, `--device /dev/ttyACM0` must match `SERIAL_PORT` so the container can access the host serial device.
+For a network CUL, set `SERIAL_PORT=tcp://host:port` and omit `--device`.
 Also see the configuration section in Readme for the full list of environment variables.
 
 ## Development

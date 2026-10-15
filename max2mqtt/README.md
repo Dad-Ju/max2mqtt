@@ -10,7 +10,7 @@ But the current solutions to integrate MAX! components into Home Assistant are n
 
 Additionally, I was curious to see if I could use AI to help me with the development of this bridge.
 
-This add-on is a lightweight Go-based bridge connecting a CUL-USB stick (868MHz MAX! protocol) to Home Assistant via MQTT. It focuses on usage of an existing MAX! installation with wall thermostats and radiator valves, only supporting the really required functions to be used with Home Assistant. It's not intended as a full replacement of MAX! Cube or the implementation contained in FHEM. 
+This add-on is a lightweight Go-based bridge connecting a CUL (USB serial or network TCP, 868MHz MAX! protocol) to Home Assistant via MQTT. It focuses on usage of an existing MAX! installation with wall thermostats and radiator valves, only supporting the really required functions to be used with Home Assistant. It's not intended as a full replacement of MAX! Cube or the implementation contained in FHEM. 
 
 ## Features
 
@@ -18,7 +18,7 @@ This bridge is intended and most suited to migrate an existing FHEM-operated MAX
 But it should work with fresh devices too...
 These are the features:
 
--   **Serial Communication**: Reads and sends `Z` telegrams from CUL-FW compatible sticks.
+-   **CUL Communication**: Reads and sends `Z` telegrams from CUL-FW compatible devices over USB serial or TCP (`tcp://host:port`).
 -   **MAX! Protocol Parsing**: Decodes Temperature, Mode, and Battery State.
 -   **Time Synchronization**: Automatically syncs time with devices.
 -   **Pairing Mode**: Trigger via MQTT (`max/bridge/pair`) to pair new devices.
@@ -62,18 +62,28 @@ If you need any of these features, use FHEM or MAX! Cube for this. After doing t
 
 1.  Prepare the Add-on:
     - Either copy this directory to your Home Assistant `addons/local/max2mqtt` folder.
-    - Or use the Add-on Store in Home Assistant: Add the repository `https://github.com/pwurbs/max2mqtt`.
+    - Or use the Add-on Store in Home Assistant: Add the repository `https://github.com/Dad-Ju/max2mqtt` (this fork, includes TCP CUL support). Upstream: `https://github.com/pwurbs/max2mqtt`.
 2.  Navigate to the Add-on Store, either the Local addon-ons section or the configured repository.
 3.  Install **MAX! to MQTT Bridge**.
 4.  Configure the parameters like described below.
 5.  Start the Add-on.
 
+### Quick start: Network CUL
+
+If your CUL is reachable over TCP (CUN/CUNO, ESP/ser2net, etc.):
+
+1. Set `serial_port` to `tcp://<ip>:<port>` (e.g. `tcp://192.168.1.50:2323`).
+2. Leave `baud_rate` at the default; it is not used for TCP.
+3. You do **not** need to map USB devices in the add-on for a network CUL.
+
+USB sticks still use a path such as `/dev/serial/by-id/...` plus `baud_rate` as before.
+
 ## Configuration Options
 
 | Environment Variable | JSON Option | Default | Description |
 |---------------------|-------------|---------|-------------|
-| `SERIAL_PORT` | `serial_port` | `/dev/serial/by-id/usb-SHK_NANO_CUL_868-if00-port0` | Path to CUL stick |
-| `BAUD_RATE` | `baud_rate` | `38400` | Serial baud rate |
+| `SERIAL_PORT` | `serial_port` | `/dev/serial/by-id/usb-SHK_NANO_CUL_868-if00-port0` | Path to CUL stick, or network URL `tcp://host:port` (also `telnet://host:port`) |
+| `BAUD_RATE` | `baud_rate` | `38400` | Serial baud rate (ignored for TCP/network CUL) |
 | `MQTT_BROKER` | `mqtt_broker` | `tcp://homeassistant:1883` | MQTT Broker URL |
 | `MQTT_USER` | `mqtt_user` | (empty) | MQTT Username |
 | `MQTT_PASS` | `mqtt_pass` | (empty) | MQTT Password |
