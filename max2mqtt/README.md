@@ -10,7 +10,27 @@ But the current solutions to integrate MAX! components into Home Assistant are n
 
 Additionally, I was curious to see if I could use AI to help me with the development of this bridge.
 
-This add-on is a lightweight Go-based bridge connecting a CUL (USB serial or network TCP, 868MHz MAX! protocol) to Home Assistant via MQTT. It focuses on usage of an existing MAX! installation with wall thermostats and radiator valves, only supporting the really required functions to be used with Home Assistant. It's not intended as a full replacement of MAX! Cube or the implementation contained in FHEM. 
+This add-on is a lightweight Go-based bridge connecting a CUL (USB serial or network TCP, 868MHz MAX! protocol) to Home Assistant via MQTT. It focuses on usage of an existing MAX! installation with wall thermostats and radiator valves, only supporting the really required functions to be used with Home Assistant. It's not intended as a full replacement of MAX! Cube or the implementation contained in FHEM.
+
+## What's new in v1.2.0 (this fork)
+
+This fork of [pwurbs/max2mqtt](https://github.com/pwurbs/max2mqtt) adds **network CUL** support:
+
+| Transport | `serial_port` value | `baud_rate` |
+|-----------|---------------------|-------------|
+| USB serial | Device path, e.g. `/dev/serial/by-id/...` | Required (default `38400`) |
+| Network TCP | `tcp://host:port` or `telnet://host:port` | Ignored |
+
+Example add-on options for a network CUL:
+
+```yaml
+serial_port: "tcp://192.168.1.50:2323"
+baud_rate: 38400
+mqtt_broker: "tcp://homeassistant.local:1883"
+gateway_id: "123456"
+```
+
+No USB device mapping is needed when using TCP. See [DOCS.md](DOCS.md#network-cul-tcp) for details and troubleshooting.
 
 ## Features
 
@@ -75,6 +95,7 @@ If your CUL is reachable over TCP (CUN/CUNO, ESP/ser2net, etc.):
 1. Set `serial_port` to `tcp://<ip>:<port>` (e.g. `tcp://192.168.1.50:2323`).
 2. Leave `baud_rate` at the default; it is not used for TCP.
 3. You do **not** need to map USB devices in the add-on for a network CUL.
+4. Start the add-on and check the log for `Opened CUL TCP connection`.
 
 USB sticks still use a path such as `/dev/serial/by-id/...` plus `baud_rate` as before.
 
@@ -142,4 +163,4 @@ Find more detailled information on the Documentation tab of the "MAX! to MQTT Br
 
 ## Feedback
 
-Please open an issue on [GitHub](https://github.com/pwurbs/max2mqtt) if you find any bugs or have suggestions for improvements.
+Please open an issue on [GitHub](https://github.com/Dad-Ju/max2mqtt) if you find any bugs or have suggestions for improvements.

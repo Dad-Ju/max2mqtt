@@ -1,5 +1,17 @@
 # Details of MAX! to MQTT Bridge for Home Assistant
 
+## CUL connection (USB or TCP)
+
+The bridge talks to a CUL-FW compatible radio interface. From v1.2.0, `serial_port` selects the transport:
+
+| Mode | `serial_port` | Notes |
+|------|---------------|--------|
+| USB serial | `/dev/ttyUSB0`, `/dev/serial/by-id/...`, … | Uses `baud_rate` (default `38400`) |
+| Network | `tcp://host:port` | Raw TCP; `baud_rate` ignored |
+| Network (alias) | `telnet://host:port` | Same as TCP (maxcul-compatible URL) |
+
+After connect, the protocol is identical for both transports (`V`, `Zr`, credit `X`, `Z…` telegrams). On disconnect, the bridge reconnects automatically.
+
 ## Time Synchronization
 
 The bridge automatically syncs time (Type `0x03`) with devices:
@@ -20,7 +32,7 @@ The bridge adheres to 868MHz 1% transmission limits using CUL's credit system.
 1. Command is dequeued from the channel
 2. Credits are checked via `X` command
 3. If credits < threshold or CUL queue busy → command is immediately discarded and state restored
-4. Command is sent to CUL stick
+4. Command is sent to the CUL (USB serial or TCP)
 5. LOVF check: If CUL returns "LOVF", log warning only and recommend to increase the credit threshold
 6. Done! The next RX from the device will confirm/correct state if needed
 
@@ -44,8 +56,8 @@ sequenceDiagram
     participant MQTT as MQTT Handler
     participant TM as TransmissionManager
     participant VM as VerificationManager
-    participant Serial as Serial Port
-    participant CUL as CUL Stick
+    participant Transport as CULTransport
+    participant CUL as CULDevice
     participant Thermo as Thermostat
 
     Note over MQTT, VM: 1. Command Initiation
@@ -57,12 +69,12 @@ sequenceDiagram
     alt Insufficient credits or CUL busy
         TM-->>MQTT: Restore State (Rollback)
     else Credits OK
-        TM->>Serial: TX command (Zs...)
-        Serial->>CUL: Send (Radio Sync)
+        TM->>Transport: TX command (Zs...)
+        Transport->>CUL: Send (USB serial or TCP)
         
         opt LOVF Response (TX buffer overflow)
-            CUL-->>Serial: "LOVF"
-            Note right of Serial: Log Warning Only
+            CUL-->>Transport: "LOVF"
+            Note right of Transport: Log Warning Only
         end
 
     end
@@ -70,8 +82,8 @@ sequenceDiagram
     Note over TM, Thermo: 3. Async Verification
     loop Every received packet
         Thermo-->>CUL: Status / Ack
-        CUL-->>Serial: RX Data
-        Serial-->>TM: Parse & Update State
+        CUL-->>Transport: RX Data
+        Transport-->>TM: Parse and Update State
         TM->>VM: CheckVerification(receivedTemp)
         
         alt Match Target
@@ -171,15 +183,41 @@ Use the full path in your config:
 
 ### Network CUL (TCP)
 
-If your CUL is reachable over the network (CUN/CUNO, ESP/ser2net bridge, etc.), set `serial_port` to a URL instead of a device path:
+If your CUL is reachable over the network (CUN/CUNO, ESP/ser2net bridge, etc.), set `serial_port` to a URL instead of a device path.
 
-```text
-tcp://192.168.1.50:2323
+**Add-on options example:**
+
+```yaml
+serial_port: "tcp://192.168.1.50:2323"
+baud_rate: 38400
+mqtt_broker: "tcp://homeassistant.local:1883"
+gateway_id: "123456"
+log_level: "info"
 ```
 
-`telnet://host:port` is accepted as an alias (same raw TCP connection). Baud rate is not used for network CULs and can be left at the default. No USB device mapping is required in the add-on when using TCP.
+**URL rules:**
+
+- Prefer `tcp://host:port` (e.g. `tcp://192.168.1.50:2323`). Port is required.
+- `telnet://host:port` works as an alias (same raw TCP dial; no Telnet IAC negotiation).
+- Host may be an IP or DNS name reachable from the Home Assistant host / add-on network.
+- `baud_rate` is ignored for network CULs; leave the default.
+- Do **not** map USB devices under the add-on hardware settings when using TCP.
+
+**Successful connect** appears in the log as:
+
+```text
+Opened CUL TCP connection addr=<host>:<port>
+```
+
+followed by init commands `V`, `Zr`, and `X` (same as USB).
 
 ## Troubleshooting
+
+### Cannot open CUL / reconnect loop
+
+- **USB:** Confirm the device path exists inside the add-on (`/dev/serial/by-id/...`) and that the add-on has access to the stick.
+- **TCP:** Confirm another host can open `host:port` (firewall, correct port — often `2323`). Check the log for `Failed to connect to CUL over TCP` or `Invalid CUL network URL`.
+- The bridge retries every few seconds after a failed open or a dropped connection.
 
 ### LOVF Error
 
