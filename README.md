@@ -18,15 +18,12 @@ Additionally, I was curious to see if I could use AI to help me with the develop
 
 This add-on is a lightweight Go-based bridge connecting a CUL (USB serial or network TCP, 868MHz MAX! protocol) to Home Assistant via MQTT. It focuses on usage of an existing MAX! installation with wall thermostats and radiator valves, only supporting the really required functions to be used with Home Assistant. It's not intended as a full replacement of MAX! Cube or the implementation contained in FHEM.
 
-## What's new in this fork (v1.2.0)
+## What's new in this fork
 
-Network / TCP CUL support is added on top of [pwurbs/max2mqtt](https://github.com/pwurbs/max2mqtt):
+Built on [pwurbs/max2mqtt](https://github.com/pwurbs/max2mqtt):
 
-- Set `serial_port` to `tcp://host:port` (or `telnet://host:port`) instead of a USB device path
-- `baud_rate` is ignored for network CULs
-- USB serial behaviour is unchanged
-
-Example add-on config:
+- **v1.2.0** — Network CUL: `serial_port: tcp://host:port` (baud unused)
+- **v1.3.0** — Full device configuration in HA (temps, valve, presets, week profile) with CUL Ack/push confirmation (no polling)
 
 ```yaml
 serial_port: "tcp://192.168.1.50:2323"
@@ -34,4 +31,4 @@ baud_rate: 38400   # unused for TCP
 mqtt_broker: "tcp://homeassistant.local:1883"
 ```
 
-Read more in the [Add-On ReadMe](max2mqtt/README.md) and the [Documentation](max2mqtt/DOCS.md) (see **Network CUL (TCP)**).
+See [Add-On ReadMe](max2mqtt/README.md) and [Documentation](max2mqtt/DOCS.md).

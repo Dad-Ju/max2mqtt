@@ -12,16 +12,24 @@ Additionally, I was curious to see if I could use AI to help me with the develop
 
 This add-on is a lightweight Go-based bridge connecting a CUL (USB serial or network TCP, 868MHz MAX! protocol) to Home Assistant via MQTT. It focuses on usage of an existing MAX! installation with wall thermostats and radiator valves, only supporting the really required functions to be used with Home Assistant. It's not intended as a full replacement of MAX! Cube or the implementation contained in FHEM.
 
-## What's new in v1.2.0 (this fork)
+## What's new in this fork
 
-This fork of [pwurbs/max2mqtt](https://github.com/pwurbs/max2mqtt) adds **network CUL** support:
+### v1.3.0 — Device configuration in Home Assistant
+
+Exposes FHEM-compatible settings as MQTT discovery entities (`entity_category: config`), with **Ack/push confirmation** (no polling):
+
+- **Climate presets:** eco, comfort, boost
+- **Temperatures (`0x11`):** eco/comfort/min/max, measurement offset, window-open temp/duration
+- **Valve (`0x12`, radiators):** boost duration/position, decalc day/hour, max valve, valve offset
+- **Other:** display mode, group ID, disassociate partner, factory reset, week profile JSON
+- Retained state on `max/<id>/config`; UI updates when the device Acks over CUL
+
+### v1.2.0 — Network CUL
 
 | Transport | `serial_port` value | `baud_rate` |
 |-----------|---------------------|-------------|
 | USB serial | Device path, e.g. `/dev/serial/by-id/...` | Required (default `38400`) |
 | Network TCP | `tcp://host:port` or `telnet://host:port` | Ignored |
-
-Example add-on options for a network CUL:
 
 ```yaml
 serial_port: "tcp://192.168.1.50:2323"
@@ -30,7 +38,7 @@ mqtt_broker: "tcp://homeassistant.local:1883"
 gateway_id: "123456"
 ```
 
-No USB device mapping is needed when using TCP. See [DOCS.md](DOCS.md#network-cul-tcp) for details and troubleshooting.
+See [DOCS.md](DOCS.md) for Network CUL and Device Configuration details.
 
 ## Features
 
@@ -44,7 +52,7 @@ These are the features:
 -   **Pairing Mode**: Trigger via MQTT (`max/bridge/pair`) to pair new devices.
 -   **Association Management**: Trigger via MQTT (`max/bridge/associate`) to associate radiator valves with wall thermostats.
 -   **Battery**: Reports battery state (OK/Low) for thermostats.
--   **Thermostat Configuration**: Supports Eco and Comfort temperature configuration and displays mode selection (Setpoint/Actual).
+-   **Thermostat Configuration**: Full ConfigTemperatures / ConfigValve / display / group / week profile via HA config entities; climate presets eco/comfort/boost; Ack-confirmed state (CUL push).
 -   **TX Management**:
     - **Duty Cycle Management**: Adheres to 868MHz 1% transmission limits using CUL's credit system. When the configurable minimum threshold is exceeded, the bridge will not send any commands and the old state is restored.
     - **Buffer Management**: Detects LOVF (Limit Of Voice Full) or CUL buffer overflow errors (configurable thresholds).
@@ -54,8 +62,8 @@ These are the features:
 -   **Auto-Discovery**: Fully compliant with HA MQTT Discovery (Climate, Number, Select, Binary Sensor).
 -   **Entities**:
     - **Climate**: Thermostat control with support for `temperature` (setpoint), `current_temperature` (actual), `hvac_action` (heating/idle), and `hvac_mode` (auto/heat/off).
-    - **Number**: Configuration entities for Eco and Comfort temperatures.
-    - **Select**: Display Mode selector for Wall Thermostats (Setpoint/Actual).
+    - **Number / Select / Text / Button**: Config entities (eco/comfort/min/max/offset/window/valve/display/group/week profile/disassociate/factory reset).
+    - **Climate presets**: eco, comfort, boost.
     - **Binary Sensor**: Battery status (OK/Low).
 -   **Pairing Mode**: Trigger via MQTT (`max/bridge/pair`) to pair new devices.
 -   **Association**: Trigger via MQTT (`max/bridge/associate`) to associate radiator valves with wall thermostats.
@@ -69,14 +77,12 @@ These are the features:
     - Boost: heat
 
 ### Not covered
-Based on the main intention of this bridge, the following features are not contained:
-- Processing valve position values
-- Processing signal strength values
-- Management of shutter contacts
-- Configuration of week plans
-- Configuration items like boost, window open, offsets etc.
+- Processing live valve position / signal strength as sensors
+- Shutter contacts and eco push-buttons as first-class entities
+- Cube/MAXLAN polling
+- fakeWT / fakeSC (external sensor simulation)
 
-If you need any of these features, use FHEM or MAX! Cube for this. After doing the configuration in FHEM or MAX! Cube, you can use this bridge again to control the thermostats. Week plans should be managed by Home Assistant anyway.
+Prefer Home Assistant schedules for day-to-day heating; device week profile JSON is available for advanced use.
 
 ## Installation and Configuration as Home Assistant Add-on
 

@@ -124,39 +124,63 @@ This bridge implements the following filter of message types.
 ### Ignored Message Types
 
 -   **Short Acknowledgements (`0x02`)**:
-    -   **Description**: Malformed or very short Acks (< 4 bytes).
-    -   **Reason**: Contain insufficient data to be useful.
+    -   **Description**: Acks with payload length &lt; 4 bytes (no full thermostat state).
+    -   **Reason**: Still used to **confirm pending config TX** (Ack tracker); climate state is not updated from short Acks.
 -   **Shutter Contacts (`0x30`)**:
     -   **Reason**: Out of scope for this climate-focused bridge.
 
 ## Device Configuration
 
-After pairing devices, you can configure additional settings directly from Home Assistant.
+After pairing, devices expose Home Assistant MQTT discovery entities with `entity_category: config`. Values are retained on `max/<id>/config`.
 
-### Eco/Comfort Temperature
+### Push / Ack confirmation (no polling)
 
-Each thermostat exposes two Number entities for configuring the eco and comfort preset temperatures:
+CUL delivers device Acks as soon as the thermostat answers. Flow:
 
-- **Eco Temperature**: The temperature used when eco mode is activated (default: 17.0°C)
-- **Comfort Temperature**: The temperature used when comfort mode is activated (default: 21.0°C)
+1. HA writes a config Number/Select (or climate preset)
+2. Bridge sends the radio command and optimistically updates retained MQTT state
+3. Device Ack (`0x02`) or status push confirms; bridge re-publishes authoritative state
+4. If no Ack within ~30s, previous values are restored
 
-> **⚠️ Important**: Don't set too many values in a short time. This could consume too many credits and block the bridge for a while.
+There is no “query all config” over CUL. After a bridge restart, retained MQTT + in-memory defaults apply until the next successful set/Ack.
 
-When changing these values, max2mqtt preserves the device's current configuration for other settings. On first use, sensible defaults are applied since the actual device config cannot be read via the CUL protocol.
+> **Important**: Don't change many config values in a short time — duty-cycle credits will block TX.
 
-### Display Mode (Wall Thermostats Only)
+### Climate presets
 
-Wall thermostats can display either the **target/setpoint temperature** or the **actual measured temperature**. A dropdown selector is provided with two options:
+Presets on the climate entity: **eco**, **comfort**, **boost** (apply stored eco/comfort temps or boost mode via `0x40`). HVAC modes remain `auto` / `heat` / `off`.
 
-- **Setpoint**: Display shows target temperature
-- **Actual**: Display shows measured room temperature
+### ConfigTemperatures (`0x11`)
 
-> **Note**: This setting appears for all devices but only affects Wall Thermostats. Radiator thermostats will ignore this command.
+| Entity | Range | Notes |
+|--------|-------|--------|
+| Eco / Comfort Temperature | 4.5–30.5 °C | Stored preset values |
+| Min / Max Temperature | 4.5–30.5 °C | Device limits |
+| Measurement Offset | −3.5–+3.5 °C | Calibration |
+| Window Open Temperature | 4.5–30.5 °C | 4.5 = Off (disable) |
+| Window Open Duration | 0–60 min (step 5) | Drop detection window |
 
-### Mode
+### ConfigValve (`0x12`, radiator thermostats)
 
-The bridge initializes new devices or existing devices after a restart with a default mode of `heat` (Manual) to have a known state.
-This means that after restarting the add-on in Home Assistant, the mode of the device will be set to `heat` (Manual). When you want to have the Auto mode back, then you need to change the mode in the Home Assistant UI.
+| Entity | Notes |
+|--------|--------|
+| Boost Duration | 0, 5, 10, 15, 20, 25, 30, 60 min |
+| Boost Valve Position | 0–100% (step 5) |
+| Decalcification Day / Hour | Sat–Fri, 0–23 |
+| Max Valve Setting / Valve Offset | 0–100% |
+
+### Other
+
+- **Display Mode** (wall): Setpoint vs Actual (`0x82`)
+- **Group ID**: 0–255 (`0x22` / remove at 0)
+- **Disassociate Partner**: text `PARTNER` or `PARTNER:type` (`0x21`)
+- **Factory Reset**: button (`0xF0`) — destructive
+- **Week Profile JSON**: text entity; payload like `{"Mon":{"time":["06:00","22:00"],"temp":[20,17]},...}` (`0x10`)
+- **Bridge Pairing**: button on the bridge device → `max/bridge/pair`
+
+### Mode after restart
+
+The bridge initializes climate mode as `heat` (Manual) when no cached state exists. Switch back to Auto in the HA UI if needed.
 
 ## Add-on Configuration
 
