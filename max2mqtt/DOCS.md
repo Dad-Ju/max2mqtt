@@ -182,11 +182,26 @@ Presets on the climate entity: **eco**, **comfort**, **boost** (apply stored eco
 
 The bridge initializes climate mode as `heat` (Manual) when no cached state exists. Switch back to Auto in the HA UI if needed.
 
+### Debug logging
+
+Set `log_level: debug` in the add-on options (or `LOG_LEVEL=debug`). That enables:
+
+- Raw CUL RX lines and credit reports
+- Full MAX packet headers (`dst`, `group`, `flag`, `cnt`, raw hex)
+- SetTemperature encoding (`mode_bits`, `payload_byte`, `gateway_id`, wake-up decision)
+- TX packet field breakdown and pending Ack tracking
+
+Keep `info` for normal operation; debug is verbose.
+
 ### SetTemperature / mode not applying
 
-1. **`gateway_id` must match the address used when devices were paired** (FHEM `CUL_MAX` / previous cube). RX works regardless; TX is only accepted from the paired master.
-2. After RX, the bridge learns each device’s **room group ID** and sends SetTemperature with flag `0x04` when group ≠ 0. Wait for at least one status packet before changing setpoint, or set Group ID manually.
-3. Check logs for `Queueing TX` / `TxMgr: TX dispatched`. If you only see credit timeouts that restore state, update to ≥ 1.3.1 (sends anyway after timeout).
+1. **`gateway_id` must match the address used when devices were paired** (FHEM `CUL_MAX` / previous cube). RX works regardless; TX is only accepted from the paired master. Check logs: `Queueing TX` shows the source embedded in `hex` (bytes after type `40`).
+2. After RX, the bridge learns each device’s **room group ID** and sends SetTemperature with flag `0x04` when group ≠ 0.
+3. Radiator valves sleep: the bridge sends **WakeUp** before SetTemperature if the device has been quiet. Prefer commanding after you see a `Parsed Packet` from that device.
+4. Look for `CUL TX` / `TxMgr: TX dispatched`, then either `Short Ack applied pending setpoint` or `Parsed Packet` from the device. Verification failure with **no** Ack lines means the radio/master address did not reach the device.
+5. Switch to `log_level: debug`, reproduce one setpoint change, and capture the `SetTemp encoding` / `TX packet fields` / `RX` lines.
+
+`fakeSCaddr` / `fakeWTaddr` are FHEM-only CUL_MAX attributes (virtual shutter contact / wall thermostat). max2mqtt does not use them for SetTemperature.
 
 ## Add-on Configuration
 

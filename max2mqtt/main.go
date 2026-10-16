@@ -184,7 +184,16 @@ func setupLogging() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
 	slog.SetDefault(logger)
 
-	fmt.Printf("time=\"%s\" level=info msg=\"Log level set to: %s\"\n", time.Now().Format(time.RFC3339), lvl)
+	slog.Info("Log level set", "level", config.LogLevel)
+	slog.Debug("Config snapshot",
+		"serial_port", config.SerialPort,
+		"gateway_id", config.GatewayID,
+		"mqtt_broker", config.MQTTBroker,
+		"duty_cycle_min_credits", config.DutyCycleMinCredits,
+		"command_timeout", config.CommandTimeout,
+		"max_cul_queue", config.MaxCulQueue,
+		"tx_check_period", config.TxCheckPeriod,
+	)
 }
 
 func setupMQTT() {
@@ -285,7 +294,12 @@ func startSerialWriter(port CulConn, in <-chan string, stopWriter <-chan struct{
 	for {
 		select {
 		case cmd := <-in:
-			slog.Debug("TX", "command", cmd)
+			// Credit polls ("X") are frequent; keep them at debug. Zs/init stay at info.
+			if cmd == "X" {
+				slog.Debug("CUL TX", "command", cmd)
+			} else {
+				slog.Info("CUL TX", "command", cmd)
+			}
 			if _, err := port.Write([]byte(cmd + "\r")); err != nil {
 				slog.Error("Failed to write to CUL", "error", err)
 				return
@@ -314,9 +328,15 @@ func processSerialLine(text string, out chan<- string) {
 	if txMgr != nil {
 		queueLen, credits, matched := ParseCreditResponse(text)
 		if matched {
+			slog.Debug("CUL credit report", "credits", credits, "cul_queue", queueLen, "raw", text)
 			txMgr.UpdateCredits(credits, queueLen)
 			txMgr.SignalCreditResponse()
+			return
 		}
+	}
+
+	if text != "" {
+		slog.Debug("CUL non-MAX line", "text", text)
 	}
 }
 
@@ -389,6 +409,17 @@ func handleSerialMessage(raw string) {
 	}
 
 	slog.Info("Parsed Packet", "src", pkt.SrcAddr, "type", fmt.Sprintf(HexTypeFormat, pkt.Type), "payload", fmt.Sprintf("%X", pkt.Payload))
+	slog.Debug("Parsed Packet detail",
+		"src", pkt.SrcAddr,
+		"dst", pkt.DstAddr,
+		"type", fmt.Sprintf(HexTypeFormat, pkt.Type),
+		"flag", fmt.Sprintf("0x%02X", pkt.Flag),
+		"group", pkt.Group,
+		"cnt", pkt.MsgCount,
+		"len", pkt.Length,
+		"payload", fmt.Sprintf("%X", pkt.Payload),
+		"raw", pkt.Raw,
+	)
 
 	// Check if this is a PairPing (Type 0x00) and we are in pairing mode
 	if pkt.Type == 0x00 {
@@ -425,10 +456,22 @@ func handleSerialMessage(raw string) {
 	//    - Extended: Length >= 6 (Has actual temp)
 	//    - Standard: Length >= 4 (Has Setpoint/Mode/Valve) - Essential for confirmation
 	// 3. SetTemperature (0x40): Manual change on Wall Thermostat
-	// Any Ack (including short) confirms pending config TX via CUL push — no polling
+	touchLastSeen(pkt.SrcAddr)
+
+	// Any Ack (including short) confirms pending config / setpoint TX via CUL push — no polling
 	if pkt.Type == 0x02 {
 		if ackTracker != nil {
 			ackTracker.Confirm(pkt.SrcAddr)
+			// Short Acks have no temp payload; still apply expected setpoint (FHEM AckSetTemperature)
+			if len(pkt.Payload) < 4 {
+				if ackTracker.ApplySetpointAck(pkt.SrcAddr) {
+					slog.Info("Short Ack applied pending setpoint", "src", pkt.SrcAddr)
+					return
+				}
+				slog.Debug("Short Ack (no pending setpoint)", "src", pkt.SrcAddr, "dst", pkt.DstAddr, "payload_len", len(pkt.Payload))
+				return
+			}
+			ackTracker.ApplySetpointAck(pkt.SrcAddr)
 		}
 	}
 
@@ -436,11 +479,7 @@ func handleSerialMessage(raw string) {
 	isValidAck := pkt.Type == 0x02 && len(pkt.Payload) >= 4
 
 	if !isValidType && !isValidAck {
-		if pkt.Type == 0x02 {
-			slog.Debug("Short Ack (config confirm)", "src", pkt.SrcAddr, "payload_len", len(pkt.Payload))
-			return
-		}
-		slog.Info("Ignored message from device", "str", pkt.SrcAddr, "type", fmt.Sprintf(HexTypeFormat, pkt.Type), "payload_len", len(pkt.Payload))
+		slog.Debug("Ignored message from device", "src", pkt.SrcAddr, "dst", pkt.DstAddr, "type", fmt.Sprintf(HexTypeFormat, pkt.Type), "group", pkt.Group, "payload_len", len(pkt.Payload))
 		return
 	}
 
@@ -448,10 +487,13 @@ func handleSerialMessage(raw string) {
 	// Remember room/group from RX — SetTemperature requires matching groupId + flag 0x04 (FHEM/Cube)
 	if pkt.Group > 0 {
 		updateDeviceGroupID(pkt.SrcAddr, pkt.Group)
+	} else {
+		slog.Debug("RX group is 0 (SetTemp will use flag 0x00)", "src", pkt.SrcAddr, "type", fmt.Sprintf(HexTypeFormat, pkt.Type))
 	}
 
 	newData := decodePayload(pkt)
 	if newData == nil {
+		slog.Debug("decodePayload returned nil", "src", pkt.SrcAddr, "type", fmt.Sprintf(HexTypeFormat, pkt.Type), "payload_len", len(pkt.Payload))
 		return
 	}
 
@@ -787,23 +829,60 @@ func handleMQTTCommand(client mqtt.Client, msg mqtt.Message) {
 
 	// Preserve current mode from state cache (default to Manual if unknown)
 	modeBits := getModeFromCache(srcAddr)
+	modeStr := "manual"
+	hvacMode := "heat"
 	// If device is in boost/vacation, applying a setpoint should switch to manual
 	if modeBits == 0x02 || modeBits == 0x03 {
+		slog.Debug("SetTemp: boost/vacation → Manual for setpoint", "src", srcAddr, "prev_mode_bits", modeBits)
 		modeBits = 0x01
 	}
+	switch modeBits {
+	case 0x00:
+		modeStr, hvacMode = "auto", "auto"
+	case 0x01:
+		modeStr, hvacMode = "manual", "heat"
+		if temp <= 4.5 {
+			hvacMode = "off"
+		}
+	}
 
-	// Payload: (Temp * 2) | (Mode << 6)
 	tempVal := byte(temp * 2)
 	payloadByte := tempVal | (modeBits << 6)
+	slog.Debug("SetTemp encoding",
+		"src", srcAddr,
+		"temp", temp,
+		"mode", modeStr,
+		"hvac", hvacMode,
+		"mode_bits", fmt.Sprintf("0x%02X", modeBits),
+		"payload_byte", fmt.Sprintf("0x%02X", payloadByte),
+		"group", getDeviceGroupID(srcAddr),
+		"gateway_id", config.GatewayID,
+		"needs_wakeup", deviceNeedsWakeUp(srcAddr),
+	)
 
+	maybeWakeDevice(srcAddr)
+	if ackTracker != nil {
+		ackTracker.TrackSetpoint(srcAddr, temp, modeStr, hvacMode)
+	}
 	sendCommand(srcAddr, 0x40, []byte{payloadByte}, fmt.Sprintf("Set Temp %.1f", temp))
 
 	if verificationMgr != nil {
 		verificationMgr.AddVerification(srcAddr, temp, func() {
 			slog.Warn("Retrying Set Temp", "temp", temp, "src", srcAddr)
+			maybeWakeDevice(srcAddr)
 			sendCommand(srcAddr, 0x40, []byte{payloadByte}, fmt.Sprintf("Retry Set Temp %.1f", temp))
 		})
 	}
+}
+
+// maybeWakeDevice sends WakeUp (0xF1) before commanding sleepy radiator valves.
+func maybeWakeDevice(dstAddr string) {
+	if !deviceNeedsWakeUp(dstAddr) {
+		slog.Debug("WakeUp skipped (device recently heard)", "dst", dstAddr)
+		return
+	}
+	slog.Info("Sending WakeUp before command (device quiet/unknown)", "dst", dstAddr)
+	sendCommand(dstAddr, 0xF1, []byte{0x3F}, "WakeUp")
 }
 
 func handleMQTTPair(client mqtt.Client, msg mqtt.Message) {
@@ -857,8 +936,24 @@ func handleMQTTModeCommand(client mqtt.Client, msg mqtt.Message) {
 	tempVal := byte(targetTemp * 2)
 	payloadByte := tempVal | (modeBits << 6)
 
-	sendCommand(srcAddr, 0x40, []byte{payloadByte}, fmt.Sprintf("Set Mode %s", mode))
+	modeStr := "manual"
+	hvacMode := mode
+	switch mode {
+	case "auto":
+		modeStr, hvacMode = "auto", "auto"
+	case "heat":
+		modeStr, hvacMode = "manual", "heat"
+	case "off":
+		modeStr, hvacMode = "manual", "off"
+	case "boost":
+		modeStr, hvacMode = "boost", "heat"
+	}
 
+	maybeWakeDevice(srcAddr)
+	if ackTracker != nil {
+		ackTracker.TrackSetpoint(srcAddr, targetTemp, modeStr, hvacMode)
+	}
+	sendCommand(srcAddr, 0x40, []byte{payloadByte}, fmt.Sprintf("Set Mode %s", mode))
 }
 
 // nextMsgCounter increments and returns the global message counter (1-255, wrapping)
@@ -922,6 +1017,16 @@ func sendCommand(dstAddr string, typeByte byte, payload []byte, description stri
 	cmd := "Zs" + hexStr
 
 	slog.Info("Queueing TX", "dst", dstAddr, "desc", description, "group", groupID, "flag", fmt.Sprintf("0x%02X", flag), "hex", hexStr)
+	slog.Debug("TX packet fields",
+		"dst", dstAddr,
+		"src", config.GatewayID,
+		"type", fmt.Sprintf("0x%02X", typeByte),
+		"cnt", cnt,
+		"group", groupID,
+		"flag", fmt.Sprintf("0x%02X", flag),
+		"payload", fmt.Sprintf("%X", payload),
+		"cul_cmd", cmd,
+	)
 
 	if txMgr != nil {
 		descWithCnt := fmt.Sprintf("%s (Cnt:%d grp:%d)", description, cnt, groupID)

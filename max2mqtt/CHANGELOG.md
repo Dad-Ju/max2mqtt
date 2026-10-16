@@ -1,3 +1,9 @@
+## 1.3.2
+
+- Apply expected setpoint on short device Ack (FHEM AckSetTemperature) — verification no longer requires a full status payload
+- Send WakeUp (`0xF1`) before SetTemperature/mode when the device has been quiet
+- Richer `log_level: debug` output for CUL RX/TX, SetTemp encoding, packet headers, and Ack tracking (credit polls stay debug-only)
+
 ## 1.3.1
 
 - Fix SetTemperature/mode TX: use learned room `groupId` with flag `0x04` (FHEM/Cube behaviour)

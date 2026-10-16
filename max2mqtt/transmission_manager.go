@@ -173,6 +173,8 @@ func (t *TransmissionManager) processCommand(cmd QueuedCommand) {
 		return
 	}
 
+	// Brief pause after credit query so TCP/serial bridges finish the X reply before Zs
+	time.Sleep(50 * time.Millisecond)
 	t.dispatchToSerial(cmd, credits, queueLen)
 }
 
@@ -203,6 +205,7 @@ func (t *TransmissionManager) queryCreditStatus() (credits int, queueLen int, ok
 	queueLen = t.QueueLength
 	t.mutex.RUnlock()
 
+	slog.Debug("TxMgr: Credit query OK", "credits", credits, "cul_queue", queueLen)
 	return credits, queueLen, true
 }
 
