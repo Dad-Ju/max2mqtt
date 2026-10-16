@@ -445,6 +445,10 @@ func handleSerialMessage(raw string) {
 	}
 
 	markDeviceType(pkt.SrcAddr, pkt.Type)
+	// Remember room/group from RX — SetTemperature requires matching groupId + flag 0x04 (FHEM/Cube)
+	if pkt.Group > 0 {
+		updateDeviceGroupID(pkt.SrcAddr, pkt.Group)
+	}
 
 	newData := decodePayload(pkt)
 	if newData == nil {
@@ -768,14 +772,14 @@ func handleMQTTCommand(client mqtt.Client, msg mqtt.Message) {
 	if len(topicParts) < 3 {
 		return
 	}
-	srcAddr := topicParts[1]
-	payloadStr := string(msg.Payload())
+	srcAddr := strings.ToUpper(topicParts[1])
+	payloadStr := strings.TrimSpace(string(msg.Payload()))
 
 	slog.Info("Received command", "src", srcAddr, "payload", payloadStr)
 
 	temp, err := strconv.ParseFloat(payloadStr, 64)
 	if err != nil {
-		slog.Error("Invalid temperature format")
+		slog.Error("Invalid temperature format", "payload", payloadStr)
 		return
 	}
 
@@ -783,15 +787,17 @@ func handleMQTTCommand(client mqtt.Client, msg mqtt.Message) {
 
 	// Preserve current mode from state cache (default to Manual if unknown)
 	modeBits := getModeFromCache(srcAddr)
+	// If device is in boost/vacation, applying a setpoint should switch to manual
+	if modeBits == 0x02 || modeBits == 0x03 {
+		modeBits = 0x01
+	}
 
 	// Payload: (Temp * 2) | (Mode << 6)
-	// Protocol says: (Method 0x40) Formula: (TargetTemp * 2) + (ModeBits << 6).
 	tempVal := byte(temp * 2)
 	payloadByte := tempVal | (modeBits << 6)
 
 	sendCommand(srcAddr, 0x40, []byte{payloadByte}, fmt.Sprintf("Set Temp %.1f", temp))
 
-	// Start Verification
 	if verificationMgr != nil {
 		verificationMgr.AddVerification(srcAddr, temp, func() {
 			slog.Warn("Retrying Set Temp", "temp", temp, "src", srcAddr)
@@ -812,8 +818,8 @@ func handleMQTTModeCommand(client mqtt.Client, msg mqtt.Message) {
 	if len(topicParts) < 4 {
 		return
 	}
-	srcAddr := topicParts[1]
-	mode := string(msg.Payload())
+	srcAddr := strings.ToUpper(topicParts[1])
+	mode := strings.TrimSpace(string(msg.Payload()))
 
 	slog.Info("Received mode command", "src", srcAddr, "mode", mode)
 
@@ -878,25 +884,27 @@ func getGatewayAddress() []byte {
 
 // sendCommand constructs and sends a MAX! message via CUL
 func sendCommand(dstAddr string, typeByte byte, payload []byte, description string) {
+	dstAddr = strings.ToUpper(dstAddr)
 	cnt := nextMsgCounter()
 	srcBytes := getGatewayAddress()
 
-	// Dst Address
 	dstBytes, _ := hex.DecodeString(dstAddr)
 	if len(dstBytes) != 3 {
 		slog.Error("Invalid destination address", "addr", dstAddr)
 		return
 	}
 
-	// Message Construction
 	// Structure: Len(1) | Cnt(1) | Flg(1) | Type(1) | Src(3) | Dst(3) | Grp(1) | Payload(...)
-	// Length byte excludes itself.
-	// Fixed Header fields after Len: Cnt(1)+Flg(1)+Type(1)+Src(3)+Dst(3)+Grp(1) = 10 bytes
 	packetLen := 10 + len(payload)
 
-	// Flag: 0x04 for broadcasts, 0x00 for regular commands (per maxcul.js)
+	// FHEM/Cube: flag 0x04 for broadcast OR when addressing a room group;
+	// groupId must match the device's room (learned from RX), else SetTemperature is ignored.
+	groupID := byte(0)
+	if dstAddr != "000000" {
+		groupID = byte(getDeviceGroupID(dstAddr))
+	}
 	var flag byte = 0x00
-	if dstAddr == "000000" {
+	if dstAddr == "000000" || groupID != 0 {
 		flag = 0x04
 	}
 
@@ -907,22 +915,18 @@ func sendCommand(dstAddr string, typeByte byte, payload []byte, description stri
 	packet = append(packet, typeByte)
 	packet = append(packet, srcBytes...)
 	packet = append(packet, dstBytes...)
-	packet = append(packet, 0x00) // GroupID (0)
+	packet = append(packet, groupID)
 	packet = append(packet, payload...)
 
-	// Encode to Hex
 	hexStr := hex.EncodeToString(packet)
-
-	// Send using Duty Cycle Manager
-	// CUL expects: Zs<HexData>
 	cmd := "Zs" + hexStr
 
+	slog.Info("Queueing TX", "dst", dstAddr, "desc", description, "group", groupID, "flag", fmt.Sprintf("0x%02X", flag), "hex", hexStr)
+
 	if txMgr != nil {
-		// Include counter in description for debugging
-		descWithCnt := fmt.Sprintf("%s (Cnt:%d)", description, cnt)
+		descWithCnt := fmt.Sprintf("%s (Cnt:%d grp:%d)", description, cnt, groupID)
 		txMgr.Enqueue(dstAddr, cmd, descWithCnt)
 	} else {
-		// Fallback if not init (should not happen)
 		select {
 		case serialWrite <- cmd:
 			slog.Info("TX", "dst", dstAddr, "desc", description, "hex", hexStr)
@@ -1149,6 +1153,7 @@ func handleMQTTPresetCommand(client mqtt.Client, msg mqtt.Message) {
 	if !ok {
 		return
 	}
+	deviceID = strings.ToUpper(deviceID)
 	preset := strings.ToLower(strings.TrimSpace(string(msg.Payload())))
 	cfg := getDeviceConfig(deviceID)
 	var modeBits byte

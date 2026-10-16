@@ -1,3 +1,9 @@
+## 1.3.1
+
+- Fix SetTemperature/mode TX: use learned room `groupId` with flag `0x04` (FHEM/Cube behaviour)
+- Do not drop TX when credit query times out; send with warning instead of silently restoring HA state
+- Normalize device addresses to uppercase for MQTT commands
+
 ## 1.3.0
 
 ### Features

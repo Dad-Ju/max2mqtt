@@ -111,6 +111,28 @@ func markDeviceType(deviceAddr string, pktType int) {
 	}
 }
 
+func updateDeviceGroupID(deviceAddr string, group int) {
+	if group <= 0 {
+		return
+	}
+	cfg := getDeviceConfig(deviceAddr)
+	configMutex.Lock()
+	changed := cfg.GroupID != group
+	cfg.GroupID = group
+	configMutex.Unlock()
+	if changed {
+		slog.Info("Learned device group ID from RX", "device", deviceAddr, "group", group)
+		publishDeviceConfig(deviceAddr)
+	}
+}
+
+func getDeviceGroupID(deviceAddr string) int {
+	cfg := getDeviceConfig(deviceAddr)
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return cfg.GroupID
+}
+
 // DeviceConfigMQTT is the retained payload for max/<id>/config
 type DeviceConfigMQTT struct {
 	DeviceConfig

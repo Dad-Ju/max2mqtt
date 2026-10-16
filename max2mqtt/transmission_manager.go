@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -151,19 +152,22 @@ func (t *TransmissionManager) processCommand(cmd QueuedCommand) {
 	// 2. Query credits and wait for response
 	credits, queueLen, ok := t.queryCreditStatus()
 	if !ok {
-		t.maybeRestoreState(cmd.DeviceID)
-		return
+		// PairPong bypasses TxMgr; if credit query fails we still TX with a warning
+		// so setpoint/mode changes are not silently dropped (HA would appear "broken").
+		t.mutex.RLock()
+		credits = t.CurrentCredits
+		queueLen = t.QueueLength
+		t.mutex.RUnlock()
+		slog.Warn("TxMgr: Credit query failed; sending anyway", "device", cmd.DeviceID, "lastCredits", credits, "queue", queueLen)
 	}
 
-	// 3. Check conditions: usage of CUL queue allowed up to MaxQueue
-	// 3. Check conditions: usage of CUL queue allowed up to MaxQueue
 	if queueLen >= t.MaxQueue {
 		slog.Warn("TxMgr: CUL queue too busy. Restoring state.", "queue", queueLen, "limit", t.MaxQueue, "device", cmd.DeviceID)
 		t.maybeRestoreState(cmd.DeviceID)
 		return
 	}
 
-	if credits < t.MinCredits {
+	if ok && credits < t.MinCredits {
 		slog.Warn("TxMgr: Insufficient credits. Restoring state.", "credits", credits, "min", t.MinCredits, "device", cmd.DeviceID)
 		t.maybeRestoreState(cmd.DeviceID)
 		return
@@ -177,10 +181,8 @@ func (t *TransmissionManager) processCommand(cmd QueuedCommand) {
 func (t *TransmissionManager) queryCreditStatus() (credits int, queueLen int, ok bool) {
 	slog.Debug("TxMgr: Querying credits before TX (X)")
 
-	// Clear any stale signal
 	drainChannel(t.creditResponse)
 
-	// Send X command to query credits/queue
 	select {
 	case serialWrite <- "X":
 	default:
@@ -188,17 +190,14 @@ func (t *TransmissionManager) queryCreditStatus() (credits int, queueLen int, ok
 		return 0, 0, false
 	}
 
-	// Wait for credit response with timeout
-	const queryTimeout = 3 * time.Second
+	const queryTimeout = 5 * time.Second
 	select {
 	case <-t.creditResponse:
-		// Response received
 	case <-time.After(queryTimeout):
 		slog.Warn("TxMgr: Credit query timeout", "timeout", queryTimeout)
 		return 0, 0, false
 	}
 
-	// Read current state
 	t.mutex.RLock()
 	credits = t.CurrentCredits
 	queueLen = t.QueueLength
@@ -237,18 +236,18 @@ func (t *TransmissionManager) restoreState(deviceID string) {
 // ParseCreditResponse checks if a line matches the credit response format
 // and returns (queueLen, credits, matched)
 func ParseCreditResponse(text string) (queueLen int, credits int, matched bool) {
-	if !creditResponseRegex.MatchString(text) {
-		return 0, 0, false
+	text = strings.TrimSpace(text)
+	if creditResponseRegex.MatchString(text) {
+		var q, c int
+		if _, err := sscanf(text, &q, &c); err == nil {
+			return q, c, true
+		}
 	}
-
-	// Parse "yy xxx" format
-	var q, c int
-	_, err := sscanf(text, &q, &c)
-	if err != nil {
-		return 0, 0, false
+	// Some firmwares reply with a bare credit number after X
+	if c, err := strconv.Atoi(text); err == nil && c >= 0 && c <= 9999 {
+		return 0, c, true
 	}
-
-	return q, c, true
+	return 0, 0, false
 }
 
 // sscanf is a helper to parse two integers from a space-separated string

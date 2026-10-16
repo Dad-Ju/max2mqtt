@@ -182,6 +182,12 @@ Presets on the climate entity: **eco**, **comfort**, **boost** (apply stored eco
 
 The bridge initializes climate mode as `heat` (Manual) when no cached state exists. Switch back to Auto in the HA UI if needed.
 
+### SetTemperature / mode not applying
+
+1. **`gateway_id` must match the address used when devices were paired** (FHEM `CUL_MAX` / previous cube). RX works regardless; TX is only accepted from the paired master.
+2. After RX, the bridge learns each device’s **room group ID** and sends SetTemperature with flag `0x04` when group ≠ 0. Wait for at least one status packet before changing setpoint, or set Group ID manually.
+3. Check logs for `Queueing TX` / `TxMgr: TX dispatched`. If you only see credit timeouts that restore state, update to ≥ 1.3.1 (sends anyway after timeout).
+
 ## Add-on Configuration
 
 ### Watchdog and restart
