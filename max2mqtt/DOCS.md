@@ -10,7 +10,21 @@ The bridge talks to a CUL-FW compatible radio interface. From v1.2.0, `serial_po
 | Network | `tcp://host:port` | Raw TCP; `baud_rate` ignored |
 | Network (alias) | `telnet://host:port` | Same as TCP (maxcul-compatible URL) |
 
-After connect, the protocol is identical for both transports (`V`, `Zr`, credit `X`, `Z…` telegrams). On disconnect, the bridge reconnects automatically.
+After connect, the protocol is identical for both transports (`V`, `Zr`, `Za<gateway_id>`, credit `X`, `Z…` telegrams). On disconnect, the bridge reconnects automatically.
+
+### Auto-Ack (`Za`)
+
+On every (re)connect the bridge sends `Za<gateway_id>` to the CUL (same as FHEM `CUL_MAX`). culfw then acknowledges these messages by itself, about 20 ms after receiving them, but only if they are addressed to `gateway_id` (culfw `rf_moritz.c`, `moritz_handleAutoAck`):
+
+- window contacts: ShutterContactState `0x30`
+- SetTemperature `0x40`
+- push buttons: PushButtonState `0x50`
+
+Without an Ack, these devices repeat their message (a window contact sent each state 4 times with the same counter in my test) and set their `rferror` bit, which costs battery and duty cycle. Radiator thermostat state (`0x60`) is sent as broadcast and needs no Ack; wall thermostat state (`0x70`, `0x42`) is not acknowledged by culfw either.
+
+The CUL reports every Ack it sends as a normal `Z…` line. These Acks come from the gateway address and are ignored by the bridge (log level `debug`: "Ignored own auto-Ack").
+
+Requires culfw 1.52 or newer (FHEM uses the same limit; older firmware switches MAX mode off on `Za`). Every a-culfw version supports it.
 
 ## Time Synchronization
 
